@@ -1,0 +1,42 @@
+{
+  "name": "@clarkchan/trajectory-reader",
+  "version": "0.2.0",
+  "description": "轨迹解读 · Trajectory Reader — a DeepSeek Harness web client plugin that adds a new 轨迹解读 tab beside 对话/轨迹. It segments the session by user turns and, per round, highlights the condensed 用户需求 and how the assistant fulfilled it (规划/调研/实现/验证/委派 action summaries, files, commands, errors, reply gist) with a rules-based engine; originals stay expandable.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "immediately": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flyingtimes/dsh-trajectory-reader.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "client-plugin",
+    "trajectory",
+    "interpret"
+  ]
+}

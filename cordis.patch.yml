@@ -1,0 +1,7 @@
+# The dsh bundle patch shipped inside this package. Declared via
+# `dsh.bundle.patch` in package.json, this file becomes an active profile
+# layer automatically after `dsh plugin --profile web add <pkg>` — no manual
+# cordis.patch.yml editing needed.
+- insert:
+    - id: trajectory-reader
+      name: '@clarkchan/trajectory-reader'
