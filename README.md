@@ -1,6 +1,29 @@
 # 📖 轨迹解读 · TRAJECTORY READER（DSH Web 客户端插件）
 
+[![npm](https://img.shields.io/npm/v/@clarkchan/trajectory-reader)](https://www.npmjs.com/package/@clarkchan/trajectory-reader)
+[![License](https://img.shields.io/npm/l/@clarkchan/trajectory-reader)](LICENSE)
+[![GitHub](https://img.shields.io/badge/GitHub-flyingtimes%2Fdsh--trajectory--reader-181717?logo=github)](https://github.com/flyingtimes/dsh-trajectory-reader)
+[![Awesome DSH](https://awesome.re/badge.svg)](https://github.com/0xsline/awesome-deepseek-harness)
+
 在 DSH Web GUI 的会话视图环（对话 / 轨迹旁）新增一个 **「轨迹解读」** 标签页：**按用户的原始轮次逐轮总结**，突出每一轮「用户的需求是什么」与「助手是如何完成需求的」，并支持 **✨ AI 过程解读** —— 由 LLM 生成该轮完整的思考与执行过程叙述。
+
+## 安装（一条命令，自动激活）
+
+```sh
+# 方式一：从 npm 安装（推荐）
+dsh plugin --profile web add @clarkchan/trajectory-reader
+
+# 方式二：直接从 GitHub 安装
+dsh plugin --profile web add "github:flyingtimes/dsh-trajectory-reader#v0.2.0"
+```
+
+> 本包声明了 `dsh.bundle.patch`，`dsh plugin add` 安装后会**自动加入 `dsh.profile.bundles` 激活**，无需手动改 `cordis.patch.yml`。之后重启 `dsh web` 即可在会话标签栏看到「对话 / 轨迹 / **轨迹解读**」。
+
+## 相关链接
+
+- npm 包：https://www.npmjs.com/package/@clarkchan/trajectory-reader
+- GitHub 仓库：https://github.com/flyingtimes/dsh-trajectory-reader
+- 社区收录：https://github.com/0xsline/awesome-deepseek-harness
 
 ## 每一轮的呈现结构
 
@@ -50,19 +73,7 @@
 
 设计要点：**四段固定结构**对应用户要求的「需求—思考—执行—结果」；**禁止编造 + 截断不猜**保证解读忠于轨迹；**强调因果承接**避免退化成工具清单；**长度上限与直出格式**保证卡片可读。
 
-## 安装 / 启用（需重启一次 GUI）
-
-```sh
-cd "$DSH_HOME/profiles/web" && pnpm add /Users/clark/code/dsh-trajectory-reader
-```
-
-`cordis.patch.yml` 应包含（部署脚本已写入）：
-
-```yaml
-- insert:
-    - id: trajectory-reader
-      name: '@clarkchan/trajectory-reader'
-```
+## 启用后（需重启一次 GUI）
 
 重启 `dsh web` 后：「轨迹解读」标签页出现；`GET /plugin-api/trajectory-reader/summarize` 探针通过后 AI 按钮可用。客户端 bundle 的修改刷新页面即生效；**服务端 `index.js` 的修改需要重启 GUI**。
 
@@ -79,4 +90,4 @@ node test/smoke.mjs   # 61 项断言：轮次切分/规则分类/材料框架化
 cd "$DSH_HOME/profiles/web" && pnpm remove @clarkchan/trajectory-reader
 ```
 
-并从 `cordis.patch.yml` 删除 `trajectory-reader` 行。
+卸载后 `dsh plugin` 会自动把该包从 `dsh.profile.bundles` 移除，无需手动清理。
