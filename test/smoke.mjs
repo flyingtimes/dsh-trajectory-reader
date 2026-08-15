@@ -47,11 +47,19 @@ try {
 // ── apply registers the conversation.view tab ──
 const registrations = [];
 let modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
+let rpcModels = async () => ({ result: { ok: true, value: { current: { provider: "rpc-provider", model: "rpc-model" } } } });
 const fakeCtx = {
   effect(fn) { return fn() || (() => {}); },
   slots: {
     register(opts, comp) { registrations.push({ slot: opts.name, id: opts.id, label: opts.label(), order: opts.order, comp: typeof comp, inject: opts.inject }); return () => {}; },
     inject(key, cb) { check("apply waits on conversation.view slot", key === "conversation.view", key); cb(); return () => {}; }
+  },
+  connection: {
+    api: {
+      sessions: {
+        models: (req) => rpcModels(req)
+      }
+    }
   },
   modelDirectories: {
     directoryFor(sessionId) {
@@ -65,13 +73,27 @@ try {
   check("apply registers the 轨迹解读 tab", !!r && r.slot === "conversation.view" && r.id === "trajectory-reader", JSON.stringify(registrations));
   check("tab label is 轨迹解读", !!r && r.label === "轨迹解读", r && r.label);
   check("tab renders a React component", !!r && r.comp === "function");
+  check("plugin declares slots+connection+modelDirectories", mod.inject.indexOf("slots") !== -1 && mod.inject.indexOf("connection") !== -1 && mod.inject.indexOf("modelDirectories") !== -1, JSON.stringify(mod.inject));
   // inject factory reads the conversation-selected model at click time
   const injected = r.inject("sess-1");
   check("inject exposes getSelectedModel", typeof injected.getSelectedModel === "function");
+  check("inject exposes fetchSelectedModel", typeof injected.fetchSelectedModel === "function");
   const sel = injected.getSelectedModel();
   check("getSelectedModel returns the UI-selected model", sel && sel.provider === "deepseek" && sel.model === "deepseek-v4-flash", JSON.stringify(sel));
   modelCurrent = null;
   check("getSelectedModel returns null without a selection", injected.getSelectedModel() === null);
+  // fetchSelectedModel: local store fast path
+  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
+  const viaFast = await injected.fetchSelectedModel();
+  check("fetchSelectedModel prefers the local store", viaFast && viaFast.provider === "deepseek" && viaFast.model === "deepseek-v4-flash", JSON.stringify(viaFast));
+  // fetchSelectedModel: falls back to the host session.models RPC
+  modelCurrent = null;
+  const viaRpc = await injected.fetchSelectedModel();
+  check("fetchSelectedModel falls back to host RPC", viaRpc && viaRpc.provider === "rpc-provider" && viaRpc.model === "rpc-model", JSON.stringify(viaRpc));
+  // fetchSelectedModel: both sources fail → null
+  rpcModels = async () => ({ result: { ok: false, error: { code: "E", message: "boom" } } });
+  const viaFail = await injected.fetchSelectedModel();
+  check("fetchSelectedModel returns null when both sources fail", viaFail === null, JSON.stringify(viaFail));
   modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
 } catch (err) {
   check("apply() runs without throwing", false, err.stack);
@@ -221,8 +243,35 @@ try {
   check("POST returns ok with one result", res.code === 200 && parsed.ok === true && parsed.results.length === 1, res.body);
   check("result text assembled from stream chunks", parsed.results[0].ok === true && parsed.results[0].text.includes("### 用户需求") && parsed.results[0].text.includes("`client.js`"), res.body);
   check("default route falls back without agentDefaultModel", parsed.route.provider === "deepseek-official" && parsed.route.model === "deepseek-v4-flash", JSON.stringify(parsed.route));
+  check("fallback route tagged source=fallback", parsed.route.source === "fallback", JSON.stringify(parsed.route));
   check("model call receives the framed JSON user message", capturedPrompt.messages[0].content[0].text.includes("帮我做一个雷电游戏") && capturedPrompt.messages[0].content[0].text.includes("JSON"), JSON.stringify(capturedPrompt.messages));
   check("model call receives the system prompt and token cap", capturedPrompt.system === serverMod.SYSTEM_PROMPT && capturedPrompt.maxTokens > 0, "");
+
+  // Explicit provider/model (对话界面选中的模型) → source=session
+  const res4 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  const req4 = JSON.stringify({ provider: "deepseek-official", model: "deepseek-v4-flash", sessionId: "sess-9", rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  await routes[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req4)); if (ev === "end") fn(); } }, res4);
+  const parsed4 = JSON.parse(res4.body);
+  check("explicit route tagged source=session", parsed4.ok === true && parsed4.route.source === "session" && parsed4.route.provider === "deepseek-official" && parsed4.route.model === "deepseek-v4-flash", JSON.stringify(parsed4.route));
+
+  // agentDefaultModel → source=default
+  const routes5 = [];
+  const fakeCtxDefault = {
+    webServer: { register(route) { routes5.push(route); return () => {}; } },
+    llm: { async *stream() {
+      yield { type: "block-start", index: 0, blockType: "text" };
+      yield { type: "text-delta", index: 0, text: "x" };
+      yield { type: "block-end", index: 0, block: { type: "text", text: "x" } };
+      yield { type: "finish", reason: { kind: "stop" } };
+    } },
+    get(name) { if (name === "agentDefaultModel") return { currentSelection: () => ({ provider: "zai-coding-cn", model: "glm-5.3" }) }; return undefined; }
+  };
+  serverMod.apply(fakeCtxDefault);
+  const res5 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  const req5 = JSON.stringify({ rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  await routes5[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req5)); if (ev === "end") fn(); } }, res5);
+  const parsed5 = JSON.parse(res5.body);
+  check("agentDefaultModel route tagged source=default", parsed5.ok === true && parsed5.route.source === "default" && parsed5.route.provider === "zai-coding-cn" && parsed5.route.model === "glm-5.3", JSON.stringify(parsed5.route));
 
   // GET probe.
   const res2 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };

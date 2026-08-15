@@ -401,6 +401,9 @@ window.__ModuleLoader__.load({
 
     var SUMMARIZE_URL = "/plugin-api/trajectory-reader/summarize";
 
+    // 模型来源标签（服务端 route.source）：「session」= 对话界面选中的模型；「default」= 会话默认模型；「fallback」= 兜底模型
+    var ROUTE_SOURCE_LABEL = { session: "会话模型", default: "默认模型", fallback: "兜底模型" };
+
     function cap(s, n) {
       s = String(s == null ? "" : s);
       return s.length > n ? s.slice(0, n - 1) + "…" : s;
@@ -493,7 +496,7 @@ window.__ModuleLoader__.load({
         ] }),
 
         ai && ai.status === "done" && jsx.jsx("div", { className: "tr-ai", children: [
-          jsx.jsx("span", { className: "tr-ai-label", children: ["🧠 AI 过程解读", jsx.jsx("span", { className: "tr-ai-route", children: "（" + (ai.route || "模型") + " 生成）" })] }),
+          jsx.jsx("span", { className: "tr-ai-label", children: ["🧠 AI 过程解读", jsx.jsx("span", { className: "tr-ai-route", children: "（" + (ai.route || "模型") + (ai.routeSource ? " · " + (ROUTE_SOURCE_LABEL[ai.routeSource] || ai.routeSource) : "") + " 生成）" })] }),
           jsx.jsx(AiText, { text: ai.text })
         ] }),
 
@@ -591,14 +594,14 @@ window.__ModuleLoader__.load({
           var next = Object.assign({}, prev);
           (results || []).forEach(function (res) {
             next[res.key] = res.ok
-              ? { status: "done", text: res.text, route: route.provider + "/" + route.model }
+              ? { status: "done", text: res.text, route: route.provider + "/" + route.model, routeSource: route.source || "?" }
               : { status: "error", error: res.error || "未知错误" };
           });
           return next;
         });
       }
 
-      function summarize(keyList, roundList) {
+      async function summarize(keyList, roundList) {
         // Everything below is wrapped so a click can NEVER be silent: any
         // failure lands in the visible error card instead of dying in the
         // handler (where React would swallow it and look like a dead button).
@@ -620,11 +623,21 @@ window.__ModuleLoader__.load({
               return { key: p.key, material: buildRoundMaterial(p.round) };
             }) };
             // 使用对话界面当前选择的模型（无则让服务端回退到默认）
-            var sel = props.getSelectedModel ? props.getSelectedModel() : null;
+            var sel = null;
+            if (props.fetchSelectedModel) {
+              sel = await props.fetchSelectedModel();
+            } else if (props.getSelectedModel) {
+              sel = props.getSelectedModel();
+            } else {
+              console.error("[trajectory-reader] 槽位 inject 未生效：props 中缺少 fetchSelectedModel/getSelectedModel（session=" + String(props.sessionId || "?") + "）");
+            }
             if (sel && typeof sel.provider === "string" && typeof sel.model === "string") {
               payload.provider = sel.provider;
               payload.model = sel.model;
+            } else {
+              console.warn("[trajectory-reader] 未读取到会话模型，回退服务端默认模型（session=" + String(props.sessionId || "?") + "）");
             }
+            if (props.sessionId) payload.sessionId = props.sessionId;
             body = JSON.stringify(payload);
           } catch (e) {
             throw new Error("构造解读材料失败：" + (e && e.message ? e.message : String(e)));
@@ -700,7 +713,7 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────── plugin ─────────────────────────
 
-    var inject = ["slots", "modelDirectories"];
+    var inject = ["slots", "connection", "modelDirectories"];
 
     function apply(ctx) {
       ctx.effect(function () {
@@ -711,18 +724,42 @@ window.__ModuleLoader__.load({
             order: 20,
             label: function () { return "轨迹解读"; },
             inject: function (sessionId) {
+              // 快速路径：本地 modelDirectories store（与对话界面模型选择器同一共享状态）
+              function syncFromDirectory() {
+                try {
+                  var dir = ctx.modelDirectories.directoryFor(sessionId);
+                  var snap = dir && dir.store ? dir.store.getSnapshot() : null;
+                  var cur = snap && snap.current;
+                  if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
+                    return { provider: cur.provider, model: cur.model };
+                  }
+                } catch (e) { /* 忽略：走宿主 RPC */ }
+                return null;
+              }
               return {
-                // 读取对话界面当前选中的模型（provider/model），点击时调用
-                getSelectedModel: function () {
+                getSelectedModel: syncFromDirectory,
+                // 权威来源：宿主 session.models RPC（与对话界面模型选择器同一数据源），
+                // 点击时异步取回当前会话选中的 provider/model，本地 store 未就绪也能拿到
+                fetchSelectedModel: function () {
+                  var fast = syncFromDirectory();
+                  if (fast) return Promise.resolve(fast);
                   try {
-                    var dir = ctx.modelDirectories.directoryFor(sessionId);
-                    var snap = dir && dir.store ? dir.store.getSnapshot() : null;
-                    var cur = snap && snap.current;
-                    if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
-                      return { provider: cur.provider, model: cur.model };
+                    var conn = ctx.connection;
+                    if (conn && conn.api && conn.api.sessions && typeof conn.api.sessions.models === "function") {
+                      return conn.api.sessions.models({ sessionId: sessionId })
+                        .then(function (res) {
+                          // 兼容 { result: { ok, value } } 与 { ok, value } 两种包装
+                          var r = res && res.result ? res.result : res;
+                          var cur = r && r.ok ? (r.value && r.value.current) : null;
+                          if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
+                            return { provider: cur.provider, model: cur.model };
+                          }
+                          return null;
+                        })
+                        .catch(function () { return null; });
                     }
                   } catch (e) { /* 忽略：回退服务端默认 */ }
-                  return null;
+                  return Promise.resolve(null);
                 }
               };
             }

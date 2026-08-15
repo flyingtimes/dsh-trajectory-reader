@@ -107,18 +107,27 @@ function frameRound(material, index) {
 /** Resolve the model route: explicit override → live default selection → fallback. */
 function resolveRoute(ctx, body) {
   if (typeof body.provider === "string" && body.provider && typeof body.model === "string" && body.model) {
-    return { provider: body.provider, model: body.model };
+    return { provider: body.provider, model: body.model, source: "session" };
   }
   const def = ctx.get("agentDefaultModel");
   if (def && typeof def.currentSelection === "function") {
     try {
       const sel = def.currentSelection();
       if (sel && typeof sel.provider === "string" && typeof sel.model === "string") {
-        return { provider: sel.provider, model: sel.model };
+        return { provider: sel.provider, model: sel.model, source: "default" };
       }
     } catch { /* fall through */ }
   }
-  return { provider: "deepseek-official", model: "deepseek-v4-flash" };
+  return { provider: "deepseek-official", model: "deepseek-v4-flash", source: "fallback" };
+}
+
+/** One-line diagnostic log (console + /tmp file); never throws. */
+function logSummarize(sessionId, route, roundCount) {
+  const line = `${new Date().toISOString()} session=${sessionId} route=${route.provider}/${route.model} source=${route.source} rounds=${roundCount}\n`;
+  try {
+    console.log(`[trajectory-reader] summarize ${line.trim()}`);
+    import("node:fs").then((fs) => fs.appendFileSync("/tmp/tr-summarize.log", line)).catch(() => {});
+  } catch { /* diagnostics must never break the route */ }
 }
 
 /** One round → one model call → { key, ok, text? , error? }. */
@@ -180,6 +189,8 @@ export function apply(ctx) {
       }
       const rounds = body.rounds.slice(0, MAX_ROUNDS_PER_REQUEST);
       const route = resolveRoute(ctx, body);
+      const sid = typeof body.sessionId === "string" && body.sessionId ? body.sessionId.slice(0, 96) : "?";
+      logSummarize(sid, route, rounds.length);
       const results = [];
       for (let i = 0; i < rounds.length; i++) {
         const r = rounds[i];

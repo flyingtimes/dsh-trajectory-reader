@@ -1,6 +1,6 @@
 {
   "name": "@clarkchan/trajectory-reader",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "轨迹解读 · Trajectory Reader — a DeepSeek Harness web client plugin that adds a new 轨迹解读 tab beside 对话/轨迹. It segments the session by user turns and, per round, highlights the condensed 用户需求 and how the assistant fulfilled it (规划/调研/实现/验证/委派 action summaries, files, commands, errors, reply gist) with a rules-based engine; originals stay expandable.",
   "type": "module",
   "main": "index.js",
