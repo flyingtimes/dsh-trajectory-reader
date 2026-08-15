@@ -24,7 +24,7 @@
 dsh plugin --profile web add @clarkchan/trajectory-reader
 
 # 方式二：直接从 GitHub 安装
-dsh plugin --profile web add "github:flyingtimes/dsh-trajectory-reader#v0.2.0"
+dsh plugin --profile web add "github:flyingtimes/dsh-trajectory-reader#v0.2.3"
 ```
 
 > 本包声明了 `dsh.bundle.patch`，`dsh plugin add` 安装后会**自动加入 `dsh.profile.bundles` 激活**，无需手动改 `cordis.patch.yml`。之后重启 `dsh web` 即可在会话标签栏看到「对话 / 轨迹 / **轨迹解读**」。

@@ -24,7 +24,7 @@ The screenshot shows the **轨迹解读** tab open in the DSH Web GUI: the conve
 dsh plugin --profile web add @clarkchan/trajectory-reader
 
 # Option 2: straight from GitHub
-dsh plugin --profile web add "github:flyingtimes/dsh-trajectory-reader#v0.2.0"
+dsh plugin --profile web add "github:flyingtimes/dsh-trajectory-reader#v0.2.3"
 ```
 
 > The package declares `dsh.bundle.patch`, so `dsh plugin add` **automatically appends it to `dsh.profile.bundles`** — no manual `cordis.patch.yml` editing. After that, restart `dsh web` and the conversation tab bar shows 对话 / 轨迹 / **轨迹解读**.
