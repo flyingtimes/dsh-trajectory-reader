@@ -46,11 +46,17 @@ try {
 
 // ── apply registers the conversation.view tab ──
 const registrations = [];
+let modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
 const fakeCtx = {
   effect(fn) { return fn() || (() => {}); },
   slots: {
-    register(opts, comp) { registrations.push({ slot: opts.name, id: opts.id, label: opts.label(), order: opts.order, comp: typeof comp }); return () => {}; },
+    register(opts, comp) { registrations.push({ slot: opts.name, id: opts.id, label: opts.label(), order: opts.order, comp: typeof comp, inject: opts.inject }); return () => {}; },
     inject(key, cb) { check("apply waits on conversation.view slot", key === "conversation.view", key); cb(); return () => {}; }
+  },
+  modelDirectories: {
+    directoryFor(sessionId) {
+      return { store: { getSnapshot: () => ({ current: modelCurrent }) } };
+    }
   }
 };
 try {
@@ -59,6 +65,14 @@ try {
   check("apply registers the 轨迹解读 tab", !!r && r.slot === "conversation.view" && r.id === "trajectory-reader", JSON.stringify(registrations));
   check("tab label is 轨迹解读", !!r && r.label === "轨迹解读", r && r.label);
   check("tab renders a React component", !!r && r.comp === "function");
+  // inject factory reads the conversation-selected model at click time
+  const injected = r.inject("sess-1");
+  check("inject exposes getSelectedModel", typeof injected.getSelectedModel === "function");
+  const sel = injected.getSelectedModel();
+  check("getSelectedModel returns the UI-selected model", sel && sel.provider === "deepseek" && sel.model === "deepseek-v4-flash", JSON.stringify(sel));
+  modelCurrent = null;
+  check("getSelectedModel returns null without a selection", injected.getSelectedModel() === null);
+  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
 } catch (err) {
   check("apply() runs without throwing", false, err.stack);
 }

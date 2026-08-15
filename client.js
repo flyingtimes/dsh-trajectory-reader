@@ -616,9 +616,16 @@ window.__ModuleLoader__.load({
           });
           var body;
           try {
-            body = JSON.stringify({ rounds: pending.slice(0, 12).map(function (p) {
+            var payload = { rounds: pending.slice(0, 12).map(function (p) {
               return { key: p.key, material: buildRoundMaterial(p.round) };
-            }) });
+            }) };
+            // 使用对话界面当前选择的模型（无则让服务端回退到默认）
+            var sel = props.getSelectedModel ? props.getSelectedModel() : null;
+            if (sel && typeof sel.provider === "string" && typeof sel.model === "string") {
+              payload.provider = sel.provider;
+              payload.model = sel.model;
+            }
+            body = JSON.stringify(payload);
           } catch (e) {
             throw new Error("构造解读材料失败：" + (e && e.message ? e.message : String(e)));
           }
@@ -693,7 +700,7 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────── plugin ─────────────────────────
 
-    var inject = ["slots"];
+    var inject = ["slots", "modelDirectories"];
 
     function apply(ctx) {
       ctx.effect(function () {
@@ -703,7 +710,22 @@ window.__ModuleLoader__.load({
             id: "trajectory-reader",
             order: 20,
             label: function () { return "轨迹解读"; },
-            inject: function () { return {}; }
+            inject: function (sessionId) {
+              return {
+                // 读取对话界面当前选中的模型（provider/model），点击时调用
+                getSelectedModel: function () {
+                  try {
+                    var dir = ctx.modelDirectories.directoryFor(sessionId);
+                    var snap = dir && dir.store ? dir.store.getSnapshot() : null;
+                    var cur = snap && snap.current;
+                    if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
+                      return { provider: cur.provider, model: cur.model };
+                    }
+                  } catch (e) { /* 忽略：回退服务端默认 */ }
+                  return null;
+                }
+              };
+            }
           }, TrajectoryReaderView);
         });
       }, "trajectory-reader: view tab");
