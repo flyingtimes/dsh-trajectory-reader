@@ -634,6 +634,7 @@ window.__ModuleLoader__.load({
             if (sel && typeof sel.provider === "string" && typeof sel.model === "string") {
               payload.provider = sel.provider;
               payload.model = sel.model;
+              if (typeof sel.reasoningEffort === "string" && sel.reasoningEffort) payload.reasoningEffort = sel.reasoningEffort;
             } else {
               console.warn("[trajectory-reader] 未读取到会话模型，回退服务端默认模型（session=" + String(props.sessionId || "?") + "）");
             }
@@ -731,9 +732,16 @@ window.__ModuleLoader__.load({
                   var snap = dir && dir.store ? dir.store.getSnapshot() : null;
                   var cur = snap && snap.current;
                   if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
-                    return { provider: cur.provider, model: cur.model };
+                    return { provider: cur.provider, model: cur.model, reasoningEffort: typeof cur.reasoningEffort === "string" ? cur.reasoningEffort : undefined };
                   }
                 } catch (e) { /* 忽略：走宿主 RPC */ }
+                return null;
+              }
+              function pick(r) {
+                var cur = r && r.ok ? (r.value && r.value.current) : null;
+                if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
+                  return { provider: cur.provider, model: cur.model, reasoningEffort: typeof cur.reasoningEffort === "string" ? cur.reasoningEffort : undefined };
+                }
                 return null;
               }
               return {
@@ -749,12 +757,7 @@ window.__ModuleLoader__.load({
                       return conn.api.sessions.models({ sessionId: sessionId })
                         .then(function (res) {
                           // 兼容 { result: { ok, value } } 与 { ok, value } 两种包装
-                          var r = res && res.result ? res.result : res;
-                          var cur = r && r.ok ? (r.value && r.value.current) : null;
-                          if (cur && typeof cur.provider === "string" && typeof cur.model === "string") {
-                            return { provider: cur.provider, model: cur.model };
-                          }
-                          return null;
+                          return pick(res && res.result ? res.result : res);
                         })
                         .catch(function () { return null; });
                     }

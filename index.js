@@ -17,8 +17,8 @@
 const SUMMARIZE_PATH = "/plugin-api/trajectory-reader/summarize";
 /** Max rounds accepted per request (each is one model call). */
 const MAX_ROUNDS_PER_REQUEST = 12;
-/** Per-round model-call budget. */
-const MAX_OUTPUT_TOKENS = 1200;
+/** Per-round model-call budget (room for reasoning + the 400-char answer). */
+const MAX_OUTPUT_TOKENS = 4000;
 const CALL_TIMEOUT_MS = 120000;
 /** Server-side re-cap of every string we forward to the model. */
 const MAX_TEXT_CHARS = 4000;
@@ -67,6 +67,24 @@ function assembleText(chunks) {
       // Authoritative final block content replaces accumulated deltas.
       if (!byIndex.has(chunk.index)) order.push(chunk.index);
       byIndex.set(chunk.index, chunk.block && chunk.block.type === "text" ? chunk.block.text || "" : "");
+    }
+  }
+  return order.sort((a, b) => a - b).map((i) => byIndex.get(i)).join("");
+}
+
+/** Assemble reasoning blocks (used when the model emitted no visible text). */
+function assembleReasoning(chunks) {
+  const byIndex = new Map();
+  const order = [];
+  for (const chunk of chunks) {
+    if (chunk.type === "block-start") {
+      if (!byIndex.has(chunk.index)) { byIndex.set(chunk.index, ""); order.push(chunk.index); }
+    } else if (chunk.type === "reasoning-delta") {
+      if (!byIndex.has(chunk.index)) { byIndex.set(chunk.index, ""); order.push(chunk.index); }
+      byIndex.set(chunk.index, byIndex.get(chunk.index) + (chunk.text || ""));
+    } else if (chunk.type === "block-end") {
+      if (!byIndex.has(chunk.index)) order.push(chunk.index);
+      byIndex.set(chunk.index, chunk.block && chunk.block.type === "reasoning" ? chunk.block.text || "" : "");
     }
   }
   return order.sort((a, b) => a - b).map((i) => byIndex.get(i)).join("");
@@ -131,7 +149,7 @@ function logSummarize(sessionId, route, roundCount) {
 }
 
 /** One round → one model call → { key, ok, text? , error? }. */
-async function summarizeRound(ctx, route, key, material, index, signal) {
+async function summarizeRound(ctx, route, key, material, index, signal, reasoningEffort) {
   try {
     const options = {
       provider: route.provider,
@@ -141,6 +159,7 @@ async function summarizeRound(ctx, route, key, material, index, signal) {
       maxTokens: MAX_OUTPUT_TOKENS,
       signal
     };
+    if (typeof reasoningEffort === "string" && reasoningEffort) options.reasoningEffort = reasoningEffort;
     const chunks = [];
     for await (const chunk of ctx.llm.stream(options)) {
       if (signal.aborted) break;
@@ -149,10 +168,19 @@ async function summarizeRound(ctx, route, key, material, index, signal) {
     signal.throwIfAborted();
     const finish = chunks.find((c) => c.type === "finish");
     if (finish && finish.reason && finish.reason.kind === "error") {
-      throw new Error(`model stream failed: ${finish.reason.error?.message || finish.reason.kind}`);
+      throw new Error(`model stream failed: ${finish.reason.error?.message || finish.reason.failure?.message || finish.reason.kind}`);
     }
     const text = assembleText(chunks).trim();
-    if (!text) throw new Error("model produced no text");
+    if (!text) {
+      // 模型只输出了思考过程（reasoning）而没给正式正文：直接展示思考内容，
+      // 避免整轮失败；若连思考都没有，再报错并附上结束原因便于排查。
+      const reasoning = assembleReasoning(chunks).trim();
+      if (reasoning) {
+        return { key, ok: true, text: "（模型本轮只输出了思考过程，未给出正式正文；以下为思考内容）\n\n" + reasoning.slice(0, 3000) };
+      }
+      const reasonKind = finish && finish.reason ? finish.reason.kind : "?";
+      throw new Error(`model produced no text（finish=${reasonKind}）`);
+    }
     return { key, ok: true, text };
   } catch (err) {
     return { key, ok: false, error: err && err.message ? err.message : String(err) };
@@ -189,6 +217,7 @@ export function apply(ctx) {
       }
       const rounds = body.rounds.slice(0, MAX_ROUNDS_PER_REQUEST);
       const route = resolveRoute(ctx, body);
+      const reasoningEffort = typeof body.reasoningEffort === "string" && body.reasoningEffort ? body.reasoningEffort : undefined;
       const sid = typeof body.sessionId === "string" && body.sessionId ? body.sessionId.slice(0, 96) : "?";
       logSummarize(sid, route, rounds.length);
       const results = [];
@@ -199,7 +228,7 @@ export function apply(ctx) {
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort(), CALL_TIMEOUT_MS);
         try {
-          results.push(await summarizeRound(ctx, route, key, material, i + 1, ac.signal));
+          results.push(await summarizeRound(ctx, route, key, material, i + 1, ac.signal, reasoningEffort));
         } finally {
           clearTimeout(timer);
         }

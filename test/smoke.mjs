@@ -46,8 +46,8 @@ try {
 
 // ── apply registers the conversation.view tab ──
 const registrations = [];
-let modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
-let rpcModels = async () => ({ result: { ok: true, value: { current: { provider: "rpc-provider", model: "rpc-model" } } } });
+let modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash", reasoningEffort: "high" };
+let rpcModels = async () => ({ result: { ok: true, value: { current: { provider: "rpc-provider", model: "rpc-model", reasoningEffort: "off" } } } });
 const fakeCtx = {
   effect(fn) { return fn() || (() => {}); },
   slots: {
@@ -80,21 +80,22 @@ try {
   check("inject exposes fetchSelectedModel", typeof injected.fetchSelectedModel === "function");
   const sel = injected.getSelectedModel();
   check("getSelectedModel returns the UI-selected model", sel && sel.provider === "deepseek" && sel.model === "deepseek-v4-flash", JSON.stringify(sel));
+  check("getSelectedModel carries the reasoning effort", sel && sel.reasoningEffort === "high", JSON.stringify(sel));
   modelCurrent = null;
   check("getSelectedModel returns null without a selection", injected.getSelectedModel() === null);
   // fetchSelectedModel: local store fast path
-  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
+  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash", reasoningEffort: "high" };
   const viaFast = await injected.fetchSelectedModel();
-  check("fetchSelectedModel prefers the local store", viaFast && viaFast.provider === "deepseek" && viaFast.model === "deepseek-v4-flash", JSON.stringify(viaFast));
+  check("fetchSelectedModel prefers the local store", viaFast && viaFast.provider === "deepseek" && viaFast.model === "deepseek-v4-flash" && viaFast.reasoningEffort === "high", JSON.stringify(viaFast));
   // fetchSelectedModel: falls back to the host session.models RPC
   modelCurrent = null;
   const viaRpc = await injected.fetchSelectedModel();
-  check("fetchSelectedModel falls back to host RPC", viaRpc && viaRpc.provider === "rpc-provider" && viaRpc.model === "rpc-model", JSON.stringify(viaRpc));
+  check("fetchSelectedModel falls back to host RPC", viaRpc && viaRpc.provider === "rpc-provider" && viaRpc.model === "rpc-model" && viaRpc.reasoningEffort === "off", JSON.stringify(viaRpc));
   // fetchSelectedModel: both sources fail → null
   rpcModels = async () => ({ result: { ok: false, error: { code: "E", message: "boom" } } });
   const viaFail = await injected.fetchSelectedModel();
   check("fetchSelectedModel returns null when both sources fail", viaFail === null, JSON.stringify(viaFail));
-  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash" };
+  modelCurrent = { provider: "deepseek", model: "deepseek-v4-flash", reasoningEffort: "high" };
 } catch (err) {
   check("apply() runs without throwing", false, err.stack);
 }
@@ -272,6 +273,67 @@ try {
   await routes5[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req5)); if (ev === "end") fn(); } }, res5);
   const parsed5 = JSON.parse(res5.body);
   check("agentDefaultModel route tagged source=default", parsed5.ok === true && parsed5.route.source === "default" && parsed5.route.provider === "zai-coding-cn" && parsed5.route.model === "glm-5.3", JSON.stringify(parsed5.route));
+
+  // reasoningEffort 透传：请求携带 → llm.stream options 收到
+  const req6 = JSON.stringify({ provider: "deepseek-official", model: "deepseek-v4-flash", reasoningEffort: "high", rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  let capturedEffort = null;
+  const fakeCtxEffort = {
+    webServer: { register(route) { routes6.push(route); return () => {}; } },
+    llm: { async *stream(options) { capturedEffort = options.reasoningEffort; yield { type: "block-start", index: 0, blockType: "text" }; yield { type: "text-delta", index: 0, text: "x" }; yield { type: "block-end", index: 0, block: { type: "text", text: "x" } }; yield { type: "finish", reason: { kind: "stop" } }; } },
+    get() { return undefined; }
+  };
+  const routes6 = [];
+  serverMod.apply(fakeCtxEffort);
+  const res6b = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  await routes6[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req6)); if (ev === "end") fn(); } }, res6b);
+  check("reasoningEffort passes through to llm.stream", capturedEffort === "high", String(capturedEffort));
+
+  // 模型只输出思考（reasoning），无正文 → 兜底返回思考内容而不是失败
+  const routes7 = [];
+  const fakeCtxReasoning = {
+    webServer: { register(route) { routes7.push(route); return () => {}; } },
+    llm: { async *stream() {
+      yield { type: "block-start", index: 0, blockType: "reasoning" };
+      yield { type: "reasoning-delta", index: 0, text: "用户想要的是解释这一轮做了什么。" };
+      yield { type: "block-end", index: 0, block: { type: "reasoning", text: "用户想要的是解释这一轮做了什么。" } };
+      yield { type: "finish", reason: { kind: "stop" } };
+    } },
+    get() { return undefined; }
+  };
+  serverMod.apply(fakeCtxReasoning);
+  const res7 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  const req7 = JSON.stringify({ rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  await routes7[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req7)); if (ev === "end") fn(); } }, res7);
+  const parsed7 = JSON.parse(res7.body);
+  check("reasoning-only output falls back to reasoning text", parsed7.results[0].ok === true && parsed7.results[0].text.includes("只输出了思考过程") && parsed7.results[0].text.includes("用户想要的是解释"), res7.body.slice(0, 200));
+
+  // 完全空输出（finish=stop）→ 明确报错并带结束原因
+  const routes8 = [];
+  const fakeCtxEmpty = {
+    webServer: { register(route) { routes8.push(route); return () => {}; } },
+    llm: { async *stream() { yield { type: "finish", reason: { kind: "stop" } }; } },
+    get() { return undefined; }
+  };
+  serverMod.apply(fakeCtxEmpty);
+  const res8 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  const req8 = JSON.stringify({ rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  await routes8[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req8)); if (ev === "end") fn(); } }, res8);
+  const parsed8 = JSON.parse(res8.body);
+  check("empty output reports finish kind", parsed8.results[0].ok === false && parsed8.results[0].error.includes("model produced no text（finish=stop）"), res8.body.slice(0, 200));
+
+  // finish 错误带 failure.message → 透出具体原因
+  const routes9 = [];
+  const fakeCtxFailing = {
+    webServer: { register(route) { routes9.push(route); return () => {}; } },
+    llm: { async *stream() { yield { type: "finish", reason: { kind: "error", failure: { message: "model returned a completed response with no content", code: "EMPTY_RESPONSE" } } }; } },
+    get() { return undefined; }
+  };
+  serverMod.apply(fakeCtxFailing);
+  const res9 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
+  const req9 = JSON.stringify({ rounds: [{ key: "k1", material: { 用户消息: "x" } }] });
+  await routes9[0].handler({ method: "POST", on(ev, fn) { if (ev === "data") fn(Buffer.from(req9)); if (ev === "end") fn(); } }, res9);
+  const parsed9 = JSON.parse(res9.body);
+  check("finish error surfaces failure.message", parsed9.results[0].ok === false && parsed9.results[0].error.includes("model returned a completed response with no content"), res9.body.slice(0, 200));
 
   // GET probe.
   const res2 = { headers: {}, body: "", code: 0, writeHead(code, headers) { this.code = code; this.headers = headers; }, end(b) { this.body = b; } };
